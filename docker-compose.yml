@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  genda:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: genda-app
+    ports:
+      - "8080:80"
+    restart: unless-stopped
