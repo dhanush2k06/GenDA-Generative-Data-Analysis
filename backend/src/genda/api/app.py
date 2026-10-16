@@ -8,10 +8,27 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
+from contextlib import asynccontextmanager
 from genda.api.security import SecurityHeadersMiddleware, ALLOWED_ORIGINS
 from genda.api.routes_session import router as session_router
 from genda.api.routes_analysis import router as analysis_router
 from genda.api.routes_report import router as report_router
+from genda.api.routes_workspace import router as workspace_router
+from genda.api.routes_metadata import router as metadata_router
+from genda.db.engine import init_db
+from genda.workspace.sweeper import run_sweep
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: ensure tables exist and sweep interrupted purges/expired keys
+    try:
+        init_db()
+        run_sweep()
+    except Exception as e:
+        import logging
+        logging.getLogger("genda").warning(f"Startup database initialization deferred: {e}")
+    yield
 
 
 def create_app() -> FastAPI:
@@ -22,6 +39,7 @@ def create_app() -> FastAPI:
         version="0.2.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=lifespan,
     )
 
     # Security headers and loopback enforcement
@@ -40,6 +58,9 @@ def create_app() -> FastAPI:
     app.include_router(session_router)
     app.include_router(analysis_router)
     app.include_router(report_router)
+    app.include_router(workspace_router)
+    app.include_router(metadata_router)
+
 
     # If built frontend exists, mount it to serve from the exact same loopback origin
     from pathlib import Path

@@ -23,6 +23,10 @@ dependencies = [
     "charset-normalizer>=3.3.0",
     "python-multipart>=0.0.9",
     "pyarrow>=15.0.0",
+    "sqlalchemy>=2.0.0",
+    "cryptography>=42.0.0",
+    "pymysql>=1.1.0",
+    "alembic>=1.13.0",
 ]
 
 [project.scripts]

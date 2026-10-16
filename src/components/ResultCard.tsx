@@ -9,21 +9,60 @@ import {
   ChevronUp,
   Table as TableIcon,
   BarChart2,
-  Info
+  Info,
+  BookOpen
 } from 'lucide-react';
 import { AnalysisResult } from '../types';
 import { PlotlyChart } from './PlotlyChart';
+import { apiClient } from '../api/client';
 
 interface ResultCardProps {
   result: AnalysisResult;
+  hasWorkspace?: boolean;
+  onLog?: (msg: string, type?: 'info' | 'success' | 'warn' | 'error') => void;
 }
 
-export function ResultCard({ result }: ResultCardProps) {
+export function ResultCard({ result, hasWorkspace, onLog }: ResultCardProps) {
   const [showTable, setShowTable] = useState(true);
   const [showChart, setShowChart] = useState(true);
+  const [savedRecipe, setSavedRecipe] = useState(false);
 
   const isPassed = result.validation_status === 'passed';
   const isWarn = result.validation_status === 'warning';
+
+  const handleSaveRecipe = async () => {
+    try {
+      // Build role-based structured spec
+      const roles: Record<string, any> = {};
+      for (const [k, v] of Object.entries(result.inputs || {})) {
+        if (typeof v === 'string') {
+          roles[k] = { type_class: k.includes('metric') ? 'numeric' : 'categorical' };
+        } else {
+          roles[k] = v;
+        }
+      }
+      const spec = {
+        operation: result.operation,
+        roles,
+      };
+
+      await apiClient.createRecipe(
+        result.title,
+        'custom',
+        spec,
+        `Recomputed ${result.operation} technique.`
+      );
+      setSavedRecipe(true);
+      if (onLog) {
+        onLog(`Saved technique "${result.title}" as reusable recipe.`, 'success');
+      }
+    } catch (err: any) {
+      if (onLog) {
+        onLog(`Failed to save recipe: ${err.message}`, 'error');
+      }
+    }
+  };
+
 
   // Extract tabular data if available in result.result
   const getTableData = (): { headers: string[]; rows: any[] } | null => {
@@ -125,6 +164,23 @@ export function ResultCard({ result }: ResultCardProps) {
             </span>
           )}
 
+          {/* Save as Recipe Button */}
+          {hasWorkspace && isPassed && (
+            <button
+              onClick={handleSaveRecipe}
+              disabled={savedRecipe}
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                savedRecipe
+                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                  : 'bg-indigo-950/60 hover:bg-indigo-900 text-indigo-300 border-indigo-700/50'
+              }`}
+              title="Save this analysis technique as a reusable structured recipe"
+            >
+              <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{savedRecipe ? 'Recipe Saved' : 'Save as Recipe'}</span>
+            </button>
+          )}
+
           {/* Execution Time */}
           <span className="inline-flex items-center space-x-1 px-2 py-1 rounded-md text-xs text-slate-400 font-mono bg-slate-900 border border-slate-800">
             <Clock className="w-3 h-3 text-slate-500" />
@@ -132,6 +188,7 @@ export function ResultCard({ result }: ResultCardProps) {
           </span>
         </div>
       </div>
+
 
       <div className="p-5 space-y-4">
         {/* Evidence Summary Callout */}

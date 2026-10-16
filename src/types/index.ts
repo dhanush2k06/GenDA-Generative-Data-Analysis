@@ -209,3 +209,100 @@ export interface LocalFileItem {
   readMemoryBytes?: number;
   readTimestamp?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Workspace, Metadata & Similarity Types
+// ---------------------------------------------------------------------------
+
+export interface WorkspaceKeyInfo {
+  workspace_key: string;
+  key_id: string;
+  message: string;
+}
+
+export interface WorkspaceStatus {
+  status: 'active' | 'revoking' | 'revoked';
+  workspace_id: string;
+  key_id: string;
+  datasets_count: number;
+  recipes_count: number;
+}
+
+export interface StoredDatasetSummary {
+  id: string;
+  name: string;
+  fingerprint: string;
+  row_count: number;
+  col_count: number;
+  created_at: string;
+}
+
+export interface StoredDatasetColumn {
+  id: string;
+  col_index: number;
+  name: string;
+  type_class: string;
+  null_rate_bucket: string;
+  distinct_ratio_bucket: string;
+  skew_bucket: string;
+}
+
+export interface StoredDatasetDetail {
+  id: string;
+  fingerprint: string;
+  name: string;
+  row_count: number;
+  col_count: number;
+  profile: DatasetProfile;
+  columns: StoredDatasetColumn[];
+  created_at: string;
+}
+
+export interface Recipe {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  version: string;
+  spec: {
+    operation: string;
+    roles: Record<string, any>;
+  };
+  created_at: string;
+}
+
+export interface SimilarityMatch {
+  target_dataset_id: string;
+  target_name: string;
+  composite_score: number;
+  stage: string;
+  column_match_ratio: number;
+  type_compatibility_score: number;
+  profile_similarity_score: number;
+  explanation: string;
+  matched_columns: Record<string, string>;
+}
+
+export interface RecipeRecommendationResponse {
+  matches: SimilarityMatch[];
+  available_recipes: Recipe[];
+  source_columns: string[];
+}
+
+export interface PurgeReport {
+  workspace_id: string;
+  key_id: string;
+  steps_completed: string[];
+  deleted_db_rows?: Record<string, number>;
+  registry_stats?: Record<string, number>;
+  cancelled_tasks?: number;
+  final_status?: string;
+}
+
+export interface AuditEventItem {
+  id: string;
+  key_id: string;
+  action: string;
+  created_at: string;
+}
+

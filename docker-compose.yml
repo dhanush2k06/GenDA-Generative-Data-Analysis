@@ -1,11 +1,46 @@
 version: "3.9"
 
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: genda-mysql
+    command: >
+      --bind-address=0.0.0.0
+      --local-infile=0
+      --sql-mode=STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION
+      --general-log=0
+      --binlog-expire-logs-seconds=86400
+      --max-connections=100
+    environment:
+      MYSQL_ROOT_PASSWORD: root_strict_secret
+      MYSQL_DATABASE: genda
+      MYSQL_USER: genda_app
+      MYSQL_PASSWORD: genda_secret
+    ports:
+      # Bound strictly to loopback interface on host
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ugenda_app", "-pgenda_secret"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   genda:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: genda-app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - GENDA_DATABASE_URL=mysql+pymysql://genda_app:genda_secret@mysql:3306/genda?charset=utf8mb4
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     restart: unless-stopped
+
+volumes:
+  mysql_data:

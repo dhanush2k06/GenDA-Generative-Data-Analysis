@@ -14,10 +14,11 @@ from genda.core.models import AnalysisResult, DatasetProfile, SessionInfo
 
 
 class SessionData:
-    def __init__(self, session_id: str, df: pl.DataFrame, filename: str):
+    def __init__(self, session_id: str, df: pl.DataFrame, filename: str, workspace_id: bytes | None = None):
         self.session_id = session_id
         self.df = df
         self.filename = filename
+        self.workspace_id = workspace_id
         self.created_at = time.time()
         self.last_accessed_at = time.time()
         self.profile: DatasetProfile | None = None
@@ -39,11 +40,17 @@ class SessionStore:
         self._lock = threading.RLock()
         self._ttl_seconds = default_ttl_seconds
 
-    def create_session(self, df: pl.DataFrame, filename: str) -> str:
+    def create_session(self, df: pl.DataFrame, filename: str, workspace_id: bytes | None = None) -> str:
         with self._lock:
             self.purge_expired()
             session_id = secrets.token_hex(16)
-            self._sessions[session_id] = SessionData(session_id, df, filename)
+            data = SessionData(session_id, df, filename, workspace_id=workspace_id)
+            self._sessions[session_id] = data
+
+            if workspace_id:
+                from genda.workspace.registry import resource_registry
+                resource_registry.register_session(workspace_id, session_id, data)
+
             return session_id
 
     def get_session(self, session_id: str) -> SessionData | None:
@@ -63,9 +70,25 @@ class SessionStore:
         with self._lock:
             data = self._sessions.pop(session_id, None)
             if data is not None:
+                if data.workspace_id:
+                    from genda.workspace.registry import resource_registry
+                    resource_registry.remove_session(data.workspace_id, session_id)
                 data.clear()
                 return True
             return False
+
+    def delete_sessions_for_workspace(self, workspace_id: bytes) -> int:
+        with self._lock:
+            to_delete = [
+                sid for sid, s in self._sessions.items()
+                if s.workspace_id == workspace_id
+            ]
+            for sid in to_delete:
+                s = self._sessions.pop(sid, None)
+                if s:
+                    s.clear()
+            return len(to_delete)
+
 
     def clear_all(self):
         with self._lock:

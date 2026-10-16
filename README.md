@@ -46,17 +46,29 @@ In-memory session store (deletable, with expiry)
 
 The analysis code lives in `backend/src/genda/core/` and has no web-framework dependencies, so it can be tested in isolation and reused elsewhere.
 
-## Privacy model
+## Privacy model & Workspace Security
 
-Raw data is sent only from the browser to a service running on your own computer (loopback). The service:
+GenDA implements a two-class data model backed by envelope encryption and crypto-shredding:
 
-- binds to `127.0.0.1` and never to a public interface
-- requires a random token generated at each launch
-- validates `Origin` and `Host` headers and uses a strict CORS allowlist
-- exposes only allowlisted operations: no shell access, no arbitrary file reads, no `eval`/`exec`
-- keeps data in memory by default and does not write rows to logs or databases
+1. **Session Data (Never Persisted to MySQL):**
+   - Raw CSV rows, in-memory Polars DataFrames, DuckDB connections, and cache files reside only in RAM or ephemeral local temp files.
+   - Cleared via `Clear Session` or when the workspace key is removed.
+2. **Workspace Knowledge (Opt-in Encrypted Metadata):**
+   - Stored in MySQL and strictly scoped to a user-owned **workspace key** (`gk_<key_id>_<secret>`).
+   - The server stores only an HKDF verifier and a wrapped Data Encryption Key (DEK). The key itself is never stored by the server or in browser storage (RAM only).
+   - Sensitive metadata (column names, statistical profiles) is encrypted using AES-256-GCM with context-bound Associated Authenticated Data (AAD).
+   - Raw data rows and sample values are never stored. Categorical frequencies below 5 are suppressed to prevent differential leakage.
+3. **8-Step Purge & Crypto-Shredding:**
+   - Removing the key or triggering an emergency purge destroys the wrapped DEK and verifier, wipes in-memory caches and frames, deletes MySQL rows, verifies zero residual data, and leaves a clean tombstone.
 
-Deleting session data does not guarantee immediate physical erasure from memory or disk. Privacy claims are verified against a checklist (see `backend/tests/privacy-checklist.md`) rather than assumed. If you find a gap, please open an issue.
+### Honest Limits
+
+- **Physical disk erasure:** Deleting session or database data does not guarantee immediate physical erasure from solid-state storage (SSD wear-leveling), OS swap space, or OS disk caches.
+- **External backups:** Backups or database snapshots made outside GenDA are outside its control. Crypto-shredding ensures sensitive columns in backups become unreadable once the wrapped DEK is destroyed, but unencrypted operational metadata remains in historical backups.
+- **Process memory:** Application-level encryption protects data at rest in MySQL and defends against SQL-read extraction attacks. It cannot protect against a compromised operating system, kernel rootkit, or a process debugger attached to RAM.
+- **No key recovery:** If you lose your workspace key, encrypted metadata cannot be decrypted or recovered, by cryptographic design.
+- **Local single-user threat model:** GenDA is engineered for local, single-user (or small trusted team) analysis on loopback interfaces, not as a public multi-tenant SaaS cloud.
+
 
 ## Tech stack
 

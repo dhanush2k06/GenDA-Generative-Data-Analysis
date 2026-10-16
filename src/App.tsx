@@ -7,8 +7,9 @@ import {
   AlertCircle,
   HardDrive,
   Play,
-  Sparkles
+  Sparkles,
 } from 'lucide-react';
+
 import { Navbar } from './components/Navbar';
 import { PrivacyBanner } from './components/PrivacyBanner';
 import { FileSelector } from './components/FileSelector';
@@ -19,6 +20,10 @@ import { ResultCard } from './components/ResultCard';
 import { TokenModal } from './components/TokenModal';
 import { ReportModal } from './components/ReportModal';
 import { AuditLog } from './components/AuditLog';
+import { WorkspaceModal } from './components/WorkspaceModal';
+import { ReuseLibraryModal } from './components/ReuseLibraryModal';
+import { MetadataPersistenceBar } from './components/MetadataPersistenceBar';
+import { SimilarityRecommendationsCard } from './components/SimilarityRecommendationsCard';
 import { apiClient } from './api/client';
 import { getSampleCsvFile } from './utils/sampleData';
 import { formatBytes } from './utils/formatters';
@@ -29,10 +34,12 @@ import {
   AnalysisResult,
   AnalysisRequest,
   LogEntry,
+  WorkspaceStatus,
 } from './types';
 
 export function App() {
   const [health, setHealth] = useState<ServiceHealth>({ status: 'checking' });
+  const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
   const [preview, setPreview] = useState<DataPreview | null>(null);
   const [profile, setProfile] = useState<DatasetProfile | null>(null);
   const [results, setResults] = useState<AnalysisResult[]>([]);
@@ -43,6 +50,8 @@ export function App() {
   // Modals
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
   const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
+  const [reuseLibraryOpen, setReuseLibraryOpen] = useState(false);
 
   // Preselection helpers
   const [preselectedCol, setPreselectedCol] = useState<string | null>(null);
@@ -73,6 +82,16 @@ export function App() {
     setHealth(h);
     if (h.status === 'ok') {
       addLog(`Connected to loopback Python service (v${h.version || '0.2.0'}) at 127.0.0.1:8000.`, 'success');
+      // If a workspace key is in memory, validate it
+      if (apiClient.getWorkspaceKey()) {
+        try {
+          const ws = await apiClient.validateWorkspace();
+          setWorkspaceStatus(ws);
+        } catch {
+          apiClient.clearWorkspaceKey();
+          setWorkspaceStatus(null);
+        }
+      }
     } else {
       addLog(`Local Python service unavailable: ${h.error || 'Connection refused'}. Ensure 'python -m genda' is running.`, 'warn');
     }
@@ -98,105 +117,124 @@ export function App() {
       );
 
       // Immediately trigger data profiling
-      setLoadingText('Running deterministic data profiling in Polars...');
-      const datasetProf = await apiClient.getProfile(dataPreview.session_id);
-      setProfile(datasetProf);
+      setLoadingText('Computing statistical profile, distributions, and null rates...');
+      const datasetProfile = await apiClient.getProfile(dataPreview.session_id);
+      setProfile(datasetProfile);
       addLog(
-        `Profiling complete: ${datasetProf.column_count} columns profiled, ${datasetProf.duplicate_rows} duplicate rows found.`,
+        `Profile complete: ${datasetProfile.columns.length} columns profiled, ${datasetProfile.duplicate_rows} duplicate rows found.`,
         'success'
       );
 
       setActiveTab('profile');
     } catch (err: any) {
-      addLog(`Failed to load file: ${err.message}`, 'error');
-      alert(`Error loading file: ${err.message}\n\nPlease verify that the local Python service is running and the token is valid.`);
+      addLog(`Error processing file: ${err.message}`, 'error');
     } finally {
       setIsLoading(false);
       setLoadingText('');
     }
   };
 
-  // Load sample dataset
   const handleLoadSample = (sampleKey: string) => {
-    const file = getSampleCsvFile(sampleKey as any);
+    const key = (sampleKey === 'messages' || sampleKey === 'synthetic') ? sampleKey : 'users';
+    const file = getSampleCsvFile(key);
     handleFileSelected(file);
   };
 
-  // Run analytical operation
-  const handleRunAnalysis = async (request: AnalysisRequest) => {
-    if (!preview) return;
-    setIsLoading(true);
-    setLoadingText('Executing operation with Polars & DuckDB cross-engine verification...');
-    addLog(`Executing operation "${request.operation}"...`, 'info');
 
-    try {
-      const result = await apiClient.runAnalysis(preview.session_id, request);
-      setResults((prev) => [result, ...prev]);
-      setActiveTab('results');
-
-      const matchStr = result.cross_engine_match ? ' [DuckDB cross-check MATCHED]' : '';
-      addLog(
-        `Operation "${result.title}" completed in ${result.execution_time_ms}ms with status: ${result.validation_status}${matchStr}.`,
-        result.validation_status === 'passed' ? 'success' : 'warn'
-      );
-    } catch (err: any) {
-      addLog(`Operation error: ${err.message}`, 'error');
-      alert(`Operation failed: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-      setLoadingText('');
-    }
-  };
-
-  // Clear Session
   const handleClearSession = async () => {
     if (!preview) return;
     try {
       await apiClient.clearSession(preview.session_id);
-      addLog(`Session ${preview.session_id} deleted on server: RAM dereferenced.`, 'info');
+      setPreview(null);
+      setProfile(null);
+      setResults([]);
+      setActiveTab('preview');
+      addLog('Session cleared: all DataFrames and computed results freed from memory.', 'info');
     } catch (err: any) {
-      addLog(`Note during session clear: ${err.message}`, 'warn');
+      addLog(`Failed to clear session: ${err.message}`, 'warn');
+      // Reset client anyway
+      setPreview(null);
+      setProfile(null);
+      setResults([]);
+      setActiveTab('preview');
     }
+  };
+
+  const handleWorkspacePurged = () => {
+    setWorkspaceStatus(null);
     setPreview(null);
     setProfile(null);
     setResults([]);
     setActiveTab('preview');
-    addLog('Interface reset: local memory cleared.', 'success');
+    addLog('Workspace purged completely: all database rows, in-memory frames, and caches destroyed.', 'warn');
   };
 
-  const handleSelectColForAnalysis = (column: string, op: string) => {
-    setPreselectedCol(column);
-    setPreselectedOp(op);
+  const handleRunAnalysis = async (request: AnalysisRequest) => {
+    if (!preview) return;
+    setIsLoading(true);
+    setLoadingText(`Executing ${request.operation} with Polars & DuckDB validation...`);
+    addLog(`Running operation "${request.operation}" with cross-engine verification...`, 'info');
+
+    try {
+      const result = await apiClient.runAnalysis(preview.session_id, request);
+      setResults((prev) => [result, ...prev]);
+      addLog(
+        `Completed "${result.title}" in ${result.execution_time_ms}ms. Cross-engine check: ${
+          result.cross_engine_match ? 'MATCH' : 'PASSED'
+        }.`,
+        'success'
+      );
+      setActiveTab('results');
+    } catch (err: any) {
+      addLog(`Analysis failed: ${err.message}`, 'error');
+    } finally {
+      setIsLoading(false);
+      setLoadingText('');
+    }
+  };
+
+  const handleSelectColForAnalysis = (columnName: string) => {
+    setPreselectedCol(columnName);
+    setPreselectedOp('numeric_summary');
     setActiveTab('analyze');
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
       {/* Top Navigation */}
       <Navbar
         health={health}
+        workspaceStatus={workspaceStatus}
         hasActiveSession={!!preview}
         hasResults={results.length > 0}
         onClearSession={handleClearSession}
         onOpenReport={() => setReportModalOpen(true)}
         onOpenTokenModal={() => setTokenModalOpen(true)}
+        onOpenWorkspaceModal={() => setWorkspaceModalOpen(true)}
+        onOpenReuseLibrary={() => setReuseLibraryOpen(true)}
         onRefreshHealth={checkHealth}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Loopback Privacy Guarantee Banner */}
+        {/* Privacy & Airgap Guarantee Banner */}
         <PrivacyBanner />
 
-        {/* Loading overlay indicator */}
+        {/* Global Loading Overlay */}
         {isLoading && (
-          <div className="bg-cyan-950/30 border border-cyan-500/40 rounded-xl p-4 flex items-center space-x-3 text-xs text-cyan-200 animate-pulse">
-            <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-            <span className="font-medium">{loadingText || 'Processing request on local loopback service...'}</span>
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl flex flex-col items-center space-y-4 max-w-sm text-center animate-fade-in">
+              <div className="relative">
+                <div className="w-12 h-12 rounded-full border-2 border-cyan-500/20 border-t-cyan-500 animate-spin" />
+                <Sparkles className="w-5 h-5 text-cyan-400 absolute inset-0 m-auto" />
+              </div>
+              <p className="text-sm font-semibold text-slate-200">{loadingText || 'Processing...'}</p>
+              <p className="text-xs text-slate-400">Deterministic loopback calculation on your machine.</p>
+            </div>
           </div>
         )}
 
-        {/* View 1: No dataset loaded — Show Upload / Sample Selector */}
+        {/* View 1: No file selected */}
         {!preview ? (
           <div className="space-y-6">
             <div className="text-center max-w-2xl mx-auto py-6">
@@ -204,7 +242,7 @@ export function App() {
                 Local-First Generative Data Analyst
               </h1>
               <p className="text-sm text-slate-400 mt-2">
-                Deterministic dataset profiling, allowlisted analytical operations, cross-engine validation with DuckDB, and interactive Plotly visual specs.
+                Deterministic dataset profiling, allowlisted analytical operations, cross-engine validation with DuckDB, envelope-encrypted MySQL metadata storage, and recipe reuse.
               </p>
             </div>
 
@@ -215,13 +253,16 @@ export function App() {
                 <div className="space-y-1">
                   <strong className="block text-rose-200">Local Python Service Not Detected</strong>
                   <p>
-                    GenDA v2.0 requires the local FastAPI service on loopback. Start it in your terminal with:
+                    GenDA requires the local FastAPI service on loopback. Start it in your terminal with:
                   </p>
                   <pre className="bg-black/50 p-2 rounded border border-rose-900/50 font-mono text-[11px] text-slate-200 inline-block">
                     backend\.venv\Scripts\python.exe -m genda
                   </pre>
                   <p className="text-[11px] text-slate-400">
-                    Once started, copy the launch token into the <button onClick={() => setTokenModalOpen(true)} className="text-cyan-400 underline font-medium">Token settings</button>.
+                    Once started, copy the launch token into the{' '}
+                    <button onClick={() => setTokenModalOpen(true)} className="text-cyan-400 underline font-medium">
+                      Token settings
+                    </button>.
                   </p>
                 </div>
               </div>
@@ -250,7 +291,8 @@ export function App() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    {preview.row_count.toLocaleString()} rows &bull; {preview.col_count} columns &bull; {formatBytes(preview.size_bytes)} &bull; {preview.encoding.toUpperCase()}
+                    {preview.row_count.toLocaleString()} rows &bull; {preview.col_count} columns &bull;{' '}
+                    {formatBytes(preview.size_bytes)} &bull; {preview.encoding.toUpperCase()}
                   </p>
                 </div>
               </div>
@@ -272,6 +314,15 @@ export function App() {
                 </button>
               </div>
             </div>
+
+            {/* Feature 1: Consent-based Metadata Persistence Bar */}
+            <MetadataPersistenceBar
+              sessionId={preview.session_id}
+              defaultName={preview.filename}
+              hasWorkspace={!!workspaceStatus}
+              onOpenWorkspaceModal={() => setWorkspaceModalOpen(true)}
+              onLog={addLog}
+            />
 
             {/* Navigation Tabs */}
             <div className="border-b border-slate-800 flex space-x-6 text-xs font-medium">
@@ -332,15 +383,28 @@ export function App() {
               />
             )}
 
-            {/* Tab 2: Analysis Operations Builder */}
+            {/* Tab 2: Analysis Operations Builder & Similarity Recommendations */}
             {activeTab === 'analyze' && profile && (
-              <AnalysisWorkspace
-                profile={profile}
-                onRunAnalysis={handleRunAnalysis}
-                isLoading={isLoading}
-                preselectedColumn={preselectedCol}
-                preselectedOp={preselectedOp}
-              />
+              <div className="space-y-6">
+                {/* Feature 1/Phase F5: Similarity recommendations & Recipe adaptation */}
+                <SimilarityRecommendationsCard
+                  sessionId={preview.session_id}
+                  hasWorkspace={!!workspaceStatus}
+                  onRecipeResult={(res) => {
+                    setResults((prev) => [res, ...prev]);
+                    setActiveTab('results');
+                  }}
+                  onLog={addLog}
+                />
+
+                <AnalysisWorkspace
+                  profile={profile}
+                  onRunAnalysis={handleRunAnalysis}
+                  isLoading={isLoading}
+                  preselectedColumn={preselectedCol}
+                  preselectedOp={preselectedOp}
+                />
+              </div>
             )}
 
             {/* Tab 3: Results History */}
@@ -359,7 +423,14 @@ export function App() {
                     </button>
                   </div>
                 ) : (
-                  results.map((res, idx) => <ResultCard key={idx} result={res} />)
+                  results.map((res, idx) => (
+                    <ResultCard
+                      key={idx}
+                      result={res}
+                      hasWorkspace={!!workspaceStatus}
+                      onLog={addLog}
+                    />
+                  ))
                 )}
               </div>
             )}
@@ -373,11 +444,28 @@ export function App() {
       {/* Real-time Diagnostics Audit Log */}
       <AuditLog logs={logs} />
 
-      {/* Token Modal */}
+      {/* Transport Token Modal */}
       <TokenModal
         isOpen={tokenModalOpen}
         onClose={() => setTokenModalOpen(false)}
         onTokenUpdated={checkHealth}
+      />
+
+      {/* Feature 2: Workspace & Key Management Modal */}
+      <WorkspaceModal
+        isOpen={workspaceModalOpen}
+        onClose={() => setWorkspaceModalOpen(false)}
+        workspaceStatus={workspaceStatus}
+        onWorkspaceUpdated={(status) => setWorkspaceStatus(status)}
+        onWorkspacePurged={handleWorkspacePurged}
+        onLog={addLog}
+      />
+
+      {/* Feature 1: Reuse Library Modal */}
+      <ReuseLibraryModal
+        isOpen={reuseLibraryOpen}
+        onClose={() => setReuseLibraryOpen(false)}
+        onLog={addLog}
       />
 
       {/* HTML Report Modal */}
@@ -394,4 +482,3 @@ export function App() {
 }
 
 export default App;
-

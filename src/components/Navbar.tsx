@@ -2,31 +2,39 @@ import {
   ShieldCheck,
   ShieldAlert,
   Key,
+  KeyRound,
+  Database,
   Trash2,
   FileText,
-  ExternalLink,
   Cpu,
   RefreshCw
 } from 'lucide-react';
-import { ServiceHealth } from '../types';
+
+import { ServiceHealth, WorkspaceStatus } from '../types';
 
 interface NavbarProps {
   health: ServiceHealth;
+  workspaceStatus: WorkspaceStatus | null;
   hasActiveSession: boolean;
   hasResults: boolean;
   onClearSession: () => void;
   onOpenReport: () => void;
   onOpenTokenModal: () => void;
+  onOpenWorkspaceModal: () => void;
+  onOpenReuseLibrary: () => void;
   onRefreshHealth: () => void;
 }
 
 export function Navbar({
   health,
+  workspaceStatus,
   hasActiveSession,
   hasResults,
   onClearSession,
   onOpenReport,
   onOpenTokenModal,
+  onOpenWorkspaceModal,
+  onOpenReuseLibrary,
   onRefreshHealth,
 }: NavbarProps) {
   const isHealthy = health.status === 'ok';
@@ -55,8 +63,8 @@ export function Navbar({
         </div>
 
         {/* Status & Actions */}
-        <div className="flex items-center space-x-3">
-          {/* Health indicator */}
+        <div className="flex items-center space-x-2.5">
+          {/* Loopback Health Indicator */}
           <button
             onClick={onRefreshHealth}
             title={isHealthy ? 'Connected to local loopback Python service' : health.error || 'Service unreachable'}
@@ -84,26 +92,44 @@ export function Navbar({
             )}
           </button>
 
+          {/* Active Workspace Indicator & Trigger */}
+          <button
+            onClick={onOpenWorkspaceModal}
+            title="Workspace Key Security & Encryption"
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              workspaceStatus
+                ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-300 hover:border-cyan-400'
+                : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+            }`}
+          >
+            <KeyRound className="w-3.5 h-3.5 text-cyan-400" />
+            {workspaceStatus ? (
+              <span>Key: <code className="font-mono text-cyan-300">{workspaceStatus.key_id}</code></span>
+            ) : (
+              <span>No Key (RAM Only)</span>
+            )}
+          </button>
+
+          {/* Library Viewer Trigger */}
+          {workspaceStatus && (
+            <button
+              onClick={onOpenReuseLibrary}
+              title="View Stored Metadata & Reusable Recipes"
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-950/40 border border-indigo-700/50 text-indigo-300 hover:text-indigo-200 hover:border-indigo-500 transition-colors"
+            >
+              <Database className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Library</span>
+            </button>
+          )}
+
           {/* Token Modal trigger */}
           <button
             onClick={onOpenTokenModal}
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:border-slate-600 transition-colors"
           >
-            <Key className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Token</span>
+            <Key className="w-3.5 h-3.5 text-slate-400" />
+            <span>Transport Token</span>
           </button>
-
-          {/* Fast API Swagger link */}
-          <a
-            href="http://127.0.0.1:8000/docs"
-            target="_blank"
-            rel="noreferrer"
-            className="hidden md:flex items-center space-x-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition-colors"
-            title="FastAPI Interactive API Documentation"
-          >
-            <span>API Docs</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
 
           {/* Export Report */}
           {hasResults && (

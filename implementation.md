@@ -26,6 +26,7 @@ This is an implementation guide, not a claim that all features already exist. Bu
 - Chart specifications generated from computed results and rendered by the frontend.
 - A report showing the question, operations, results, and limitations.
 - A **Clear session** action that deletes server-side session data and resets the interface.
+- Opt-in, workspace-scoped metadata persistence in MySQL (via user workspace keys, envelope encryption, and crypto-shredding as detailed in `feature_implementation_plan.md`).
 - Network inspection confirming raw file contents go only to the local service and nowhere else.
 
 ### Defer until the MVP is reliable
@@ -40,7 +41,7 @@ This is an implementation guide, not a claim that all features already exist. Bu
 
 ## 3. Architecture
 
-### MVP architecture: React UI + local Python service
+### MVP architecture: React UI + local Python service + MySQL metadata store
 
 ```text
 User
@@ -50,37 +51,43 @@ React + TypeScript interface (Vite)
   |-- file picker (user-selected files only)
   |-- question and analysis controls
   |-- preview, charts, report, clear-session control
+  |-- workspace key management (in-memory only) & metadata consent
   |
   |  HTTP to 127.0.0.1 only
-  |  per-launch token + origin and Host validation
+  |  per-launch token + workspace key (Authorization header) + Host validation
   v
 Local Python service (FastAPI + Uvicorn)
   |-- request validation (Pydantic)
   |-- CSV loading and schema detection (Polars)
   |-- profiler and data-quality checks (Polars, Pandera)
   |-- allowlisted analytical operations (Polars, DuckDB, SciPy, statsmodels)
-  |-- result validation and cross-engine checks
-  |-- chart-spec builder (Plotly / Altair)
-  |-- report builder (Jinja2, optional WeasyPrint)
+  |-- similarity engine & recipe adapter
+  |-- repository layer (SQLAlchemy bind parameters only)
   |
-  v
-In-memory session store (per-session, deletable)
-  + controlled temporary workspace (only if needed for large files)
+  +---> In-memory session store (RAM only, per-session, deletable)
+  |
+  +---> MySQL database (127.0.0.1 only, least-privilege, envelope-encrypted)
 ```
 
-### Privacy model (revised)
+### Privacy model & Workspace Key Model
 
-The v1.0 claim "raw data never leaves the browser" no longer applies. The accurate claim for v2.0 is:
+Raw data is sent only from the browser to a service running on the user's own machine (loopback). It is not transmitted to any remote server. Stored data is split into two classes:
 
-> Raw data is sent only from the browser to a service running on the user's own machine (loopback). It is not transmitted to any remote server, and it is not persisted by default.
+1. **Session Data (Never Persisted to MySQL):**
+   Raw CSV rows, DataFrames, in-memory caches, and temporary files remain in RAM and controlled local temp directories. They are cleared when the session is closed or purged.
+2. **Workspace Knowledge (Opt-in Encrypted Metadata):**
+   Persisted dataset fingerprints, statistical profile aggregates, and structured recipe specs in MySQL, strictly scoped to a user-owned workspace key (`gk_<key_id>_<secret>`).
+   - The server stores only an HKDF verifier and wrapped DEK.
+   - Sensitive metadata columns are encrypted using AES-256-GCM bound to workspace and row IDs.
+   - Removing the key or running an emergency clear executes complete crypto-shredding and an 8-step purge across memory, caches, files, and MySQL.
 
-This claim must be verified (Phase 7), not assumed. The service must therefore:
-
+The service must:
 - Bind to `127.0.0.1` only, never `0.0.0.0`.
 - Require a random token generated at each launch.
-- Validate the `Origin` and `Host` headers (this also defends against DNS-rebinding attacks).
-- Use a strict CORS allowlist, never a wildcard.
-- Expose only the allowlisted analytical operations. No shell execution, no arbitrary file reads, no `eval`/`exec` of user-derived text.
+- Validate `Origin` and `Host` headers.
+- Use a strict CORS allowlist.
+- Expose only allowlisted operations and parameter-bound database access.
+
 
 **Serving option:** in development, Vite serves the UI on its own port and proxies API calls. For a packaged build, have the Python service serve the built frontend from the same origin. This removes cross-origin complexity.
 
@@ -380,12 +387,15 @@ Test these behaviors before describing the app as privacy-preserving:
 - Verify the Clear Session action deletes the session's dataframes, temporary files, and cached results on the server, and resets previews and results in the UI.
 - Verify session expiry (TTL) cleans up abandoned sessions.
 - Run the security tests: missing or wrong token, foreign `Origin`, forged `Host`, oversized upload, malformed multipart body.
+- Verify SQL injection defenses (SQLAlchemy bind parameters only, zero dynamic identifiers, untrusted CSV column names).
+- Verify tenant isolation tests: Workspace A cannot read or delete Workspace B's records by ID guessing.
+- Verify 8-step complete purge, crypto-shredding (DEK erasure), and crash-recovery sweeper.
 - Check dependency advisories (`pip-audit`, `npm audit`) and avoid unsafe HTML rendering in both the frontend and Jinja2 templates.
 - Ensure exported reports are saved only when the user initiates export.
 
 Clearing Python references or deleting temporary files does not guarantee immediate physical erasure from memory or storage. State privacy claims precisely and document limitations.
 
-**Exit criteria:** The privacy checklist is completed and the observed behavior matches the documented claims.
+**Exit criteria:** The privacy checklist is completed and all isolation, injection, and purge tests pass.
 
 ### Phase 8 — Predictive analytics
 
@@ -405,22 +415,22 @@ Use statsmodels when inference (coefficients, confidence intervals) matters more
 
 **Exit criteria:** Models are compared using reproducible validation procedures (fixed seeds, documented splits) and a baseline.
 
-### Phase 9 — Analytical Experience Engine
+### Phase 9 — Analytical Experience Engine (MySQL & Workspace Keys)
 
-Start with a workflow library, not a claim of autonomous learning.
+Implemented according to `feature_implementation_plan.md`:
 
 Store structured recipes containing:
 
 - Problem category and prerequisites.
 - Workflow steps and version.
-- Expected input types.
+- Column roles (e.g., `group_by: categorical`, `metric: numeric`).
 - Validation procedure and metrics.
 - Known failure conditions.
 - Aggregate outcomes and user-approved feedback.
 
-Persist recipes in SQLite as metadata only. For a new problem, retrieve candidate recipes, verify prerequisites, adapt the workflow, and test it against the current data. Compare the outcome with a baseline workflow before claiming improvement. Provide controls to inspect and delete stored experience.
+Persist recipes and dataset fingerprints in MySQL under envelope encryption with workspace keys (`gk_<key_id>_<secret>`). Multi-stage similarity matching (exact schema fingerprint, structural column overlap with fuzzy matching, and profile distributions) recommends relevant recipes for similar datasets with human-readable explanations, requiring explicit user confirmation of column bindings before execution.
 
-**Exit criteria:** Experiments demonstrate whether workflow reuse improves speed, reliability, or quality.
+**Exit criteria:** Benchmark similarity pairs match correctly; reused recipes validate before display; all metadata is purged on key revocation.
 
 ### Phase 10 — Packaging and optional expanded access
 
@@ -428,20 +438,12 @@ Because the Python service is now the core of the app, this phase covers distrib
 
 Packaging:
 
-- Bundle the service and built frontend (PyInstaller or Nuitka), served from the same origin.
-- Pin dependencies with the `uv` lockfile and document system requirements (for example, WeasyPrint libraries).
+- Bundle the service, MySQL connection configurations, and built frontend (PyInstaller or Docker Compose), served on loopback.
+- Hardened MySQL setup: `127.0.0.1` binding, `local-infile=OFF`, strict SQL mode, least-privilege `genda_app` user without DDL permissions.
+- Secret handling: DB credentials loaded from environment variables or secret stores; workspace keys never logged or persisted on disk.
+- Pin dependencies with lockfiles and document system requirements.
 - Provide clear start, stop, and cancel controls.
 
-Optional expanded access (folders, databases), only when required:
-
-- Require explicit user approval for each folder or database permission.
-- Never expose unrestricted filesystem or shell execution.
-- Use parameterized database queries and validate all inputs.
-- Use a controlled temporary directory (via platformdirs) and clean up app-created temporary files.
-- Keep raw data out of diagnostic logs.
-- Use short-lived tokens and restrict allowed operations.
-
-**Exit criteria:** Threat-model review, permission tests, origin checks, and cleanup tests pass on the packaged build.
 
 ## 7. Data and session design
 

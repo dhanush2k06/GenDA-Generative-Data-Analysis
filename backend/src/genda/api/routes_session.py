@@ -14,6 +14,9 @@ from genda.api.security import verify_token, get_active_token
 router = APIRouter(prefix="/api", tags=["session"])
 
 
+from genda.db.engine import check_db_health
+
+
 @router.get("/health", response_model=HealthResponse)
 async def get_health():
     """Service health check — verifies loopback service is responding."""
@@ -23,7 +26,9 @@ async def get_health():
         version="0.2.0",
         loopback_only=True,
         session_count=session_store.active_count,
+        database=check_db_health(),
     )
+
 
 
 @router.get("/auth/verify")
@@ -32,10 +37,15 @@ async def verify_auth(token: str = Depends(verify_token)):
     return {"status": "authenticated", "valid": True}
 
 
+from genda.auth.context import get_optional_workspace_context, WorkspaceContext
+from typing import Optional
+
+
 @router.post("/session/upload", response_model=DataPreview)
 async def upload_csv(
     file: UploadFile = File(...),
     token: str = Depends(verify_token),
+    ws_ctx: Optional[WorkspaceContext] = Depends(get_optional_workspace_context),
 ):
     """
     Upload CSV file directly to local loopback memory.
@@ -60,11 +70,13 @@ async def upload_csv(
             detail=f"Failed to process file: {type(e).__name__}",
         )
 
-    # Store in memory session
-    session_id = session_store.create_session(df=df, filename=file.filename)
+    # Store in memory session, scoped to workspace if provided
+    ws_id = ws_ctx.workspace_id if ws_ctx else None
+    session_id = session_store.create_session(df=df, filename=file.filename, workspace_id=ws_id)
     preview.session_id = session_id
 
     return preview
+
 
 
 @router.get("/session/{session_id}", response_model=SessionInfo)

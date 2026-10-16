@@ -158,3 +158,5 @@ class HealthResponse(BaseModel):
     version: str = "0.2.0"
     loopback_only: bool = True
     session_count: int = 0
+    database: dict[str, Any] = Field(default_factory=dict)
+
