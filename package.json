@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "start": "run.bat",
     "dev": "vite",
     "dev:backend": "backend\\.venv\\Scripts\\python.exe -m genda --port 8000 --token dev-token-local-genda-123",
     "test:backend": "cd backend && .venv\\Scripts\\pytest.exe -v",

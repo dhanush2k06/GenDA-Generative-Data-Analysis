@@ -49,12 +49,17 @@ export function PlotlyChart({ spec, height = 380, className = '' }: PlotlyChartP
     if (window.Plotly) {
       renderChart();
     } else {
-      // Poll briefly for CDN script load if needed
+      // Poll briefly for CDN script load if needed (max 5 seconds)
+      let retries = 0;
       pollInterval = setInterval(() => {
+        retries++;
         if (window.Plotly) {
           clearInterval(pollInterval!);
           pollInterval = null;
           renderChart();
+        } else if (retries > 50) {
+          clearInterval(pollInterval!);
+          pollInterval = null;
         }
       }, 100);
     }

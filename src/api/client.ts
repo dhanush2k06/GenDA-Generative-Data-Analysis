@@ -23,7 +23,7 @@ export class GenDAApiClient {
   constructor(baseUrl: string = '', token: string = '') {
     // If empty baseUrl, relative paths go through Vite's /api proxy to 127.0.0.1:8000
     this.baseUrl = baseUrl;
-    this.token = token || localStorage.getItem('genda_token') || '';
+    this.token = token || localStorage.getItem('genda_token') || 'dev-token-local-genda-123';
   }
 
   setToken(token: string) {
